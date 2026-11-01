@@ -1,0 +1,71 @@
+{
+  "generator": "sast-code-audit",
+  "skill_version": "1.0.0",
+  "stage": 2,
+  "stage_name": "exploration",
+  "generated_at": "2026-11-09T10:06:00+08:00",
+  "vulnerabilities": [
+    {
+      "id": "VULN-0001",
+      "name": "文章列表 sort 参数拼接导致 SQL 注入",
+      "vuln_type": "sql_injection",
+      "cwe": "CWE-89",
+      "severity": "CRITICAL",
+      "confidence": 0.9,
+      "file": "src/routes/posts.js",
+      "line": 34,
+      "function": "listPosts",
+      "source": {
+        "location": "src/routes/posts.js:31",
+        "description": "GET /api/posts（公开路由）的 req.query.sort，未经任何字符集约束"
+      },
+      "sink": {
+        "location": "src/routes/posts.js:34",
+        "description": "db('posts').orderByRaw(sort) 将用户输入直接拼接进 ORDER BY 子句"
+      },
+      "data_flow": [
+        "src/routes/posts.js:31 → const sort = req.query.sort || 'created_at'（用户输入）",
+        "src/routes/posts.js:32 → if (!sort) throw ... 仅校验非空，未限制字符集",
+        "src/routes/posts.js:34 → db('posts').select(...).orderByRaw(sort) 拼接执行"
+      ],
+      "exploit_conditions": "无需认证（公开路由）。sqlite 支持子查询，可构造 sort=(CASE WHEN (SELECT substr(email,1,1) FROM users WHERE id=1)='a' THEN id ELSE title END) 进行布尔盲注提取任意表数据",
+      "risk_description": "公网未认证用户可通过 ORDER BY 盲注逐字符提取 users 表（含密码哈希、email、phone），等效任意数据泄露",
+      "evidence": "const sort = req.query.sort || 'created_at';\nconst rows = await db('posts').select('id', 'title', 'created_at').orderByRaw(sort);",
+      "recommendation": "将 sort 映射到白名单列名（const COLUMNS = { date: 'created_at', title: 'title' }），未命中白名单时回退默认值；禁止将用户输入传给 orderByRaw",
+      "review_status": "pending_review",
+      "origin_stage": 2,
+      "fingerprint": "sql_injection|src/routes/posts.js:31|src/routes/posts.js:34|listPosts"
+    },
+    {
+      "id": "VULN-0002",
+      "name": "头像代理接口任意 URL 拉取（SSRF）",
+      "vuln_type": "ssrf",
+      "cwe": "CWE-918",
+      "severity": "HIGH",
+      "confidence": 0.8,
+      "file": "src/routes/avatar.js",
+      "line": 27,
+      "function": "fetchAvatar",
+      "source": {
+        "location": "src/routes/avatar.js:24",
+        "description": "已登录用户提交的 req.query.url，声称为头像地址"
+      },
+      "sink": {
+        "location": "src/routes/avatar.js:27",
+        "description": "axios.get(url) 服务端直接向用户指定 URL 发起请求并回传响应体"
+      },
+      "data_flow": [
+        "src/routes/avatar.js:24 → const url = req.query.url（用户输入）",
+        "src/routes/avatar.js:25 → res.locals.fetch 未做任何校验，直接透传",
+        "src/routes/avatar.js:27 → axios.get(url) 发起服务端请求"
+      ],
+      "exploit_conditions": "任意已登录用户；可请求 http://169.254.169.254/ 云元数据端点或内网服务并读取响应",
+      "risk_description": "服务端按用户指定 URL 发起请求并回传内容，可用于探测内网、读取云实例元数据凭据",
+      "evidence": "const url = req.query.url;\nconst resp = await axios.get(url, { responseType: 'arraybuffer' });\nres.type('image/*').send(resp.data);",
+      "recommendation": "改用统一的 fetch-client 封装（scheme + 域名白名单、禁止解析到内网 IP），并对响应大小与类型做限制",
+      "review_status": "pending_review",
+      "origin_stage": 2,
+      "fingerprint": "ssrf|src/routes/avatar.js:24|src/routes/avatar.js:27|fetchAvatar"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+# Audit outputs produced against a real project root (keep them out of the repo)
+/.sast/
+/results/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/

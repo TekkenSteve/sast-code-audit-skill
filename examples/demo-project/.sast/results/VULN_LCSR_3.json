@@ -1,0 +1,52 @@
+{
+  "generator": "sast-code-audit",
+  "skill_version": "1.0.0",
+  "stage": 3,
+  "stage_name": "checklist",
+  "generated_at": "2026-11-09T10:12:00+08:00",
+  "vulnerabilities": [
+    {
+      "id": "VULN-0003",
+      "name": "个人资料接口水平越权（IDOR）",
+      "vuln_type": "idor",
+      "cwe": "CWE-639",
+      "severity": "HIGH",
+      "confidence": 0.85,
+      "file": "src/routes/profile.js",
+      "line": 40,
+      "function": "getProfile",
+      "source": {
+        "location": "src/routes/profile.js:38",
+        "description": "已认证用户 A 的 req.params.userId，可改写为任意用户 id"
+      },
+      "sink": {
+        "location": "src/routes/profile.js:40",
+        "description": "db('users').where({ id: userId }).first() 后将含 email、phone 的完整记录返回给调用方，无归属校验"
+      },
+      "data_flow": [
+        "src/routes/profile.js:38 → const userId = req.params.userId（认证用户可控）",
+        "src/routes/profile.js:39 → 中间件仅验证 JWT 有效，未对比 req.user.id 与 userId",
+        "src/routes/profile.js:40 → db('users').where({ id: userId }).first() 直接返回他人 email/phone"
+      ],
+      "exploit_conditions": "任意已登录用户，遍历 :userId 即可批量读取全部用户的 email 与 phone",
+      "risk_description": "对象级授权缺失，任意登录用户可枚举读取他人 PII（email、phone），构成跨用户数据泄露",
+      "evidence": "router.get('/profile/:userId', requireAuth, async (req, res) => {\n  const userId = req.params.userId;\n  const profile = await db('users').where({ id: userId }).first();\n  res.json(profile); // 返回含 email、phone 的完整行",
+      "recommendation": "以 req.user.id 为查询主键（普通用户禁止传 :userId），或在 repository 层追加 where({ id: userId, owner: req.user.id }) 归属校验；管理端查询单独走管理员角色路由",
+      "review_status": "pending_review",
+      "origin_stage": 3,
+      "fingerprint": "idor|src/routes/profile.js:38|src/routes/profile.js:40|getProfile"
+    }
+  ],
+  "checklist_coverage": [
+    { "category": "injection", "status": "clean", "note": "SQL 注入已由模块二发现（VULN-0001），本轮未发现新的注入点" },
+    { "category": "files-paths", "status": "clean", "note": "上传走 multer，落盘名为服务端随机名；未见路径拼接使用用户输入" },
+    { "category": "request-network", "status": "clean", "note": "SSRF 已由模块二发现（VULN-0002）；未使用 XML 解析" },
+    { "category": "auth-session", "status": "clean", "note": "JWT 验签启用且校验 exp；密码重置令牌为高熵一次性" },
+    { "category": "authorization", "status": "vulnerable", "note": "发现 VULN-0003（profile 路由 IDOR）" },
+    { "category": "deserialization", "status": "not_applicable", "note": "无反序列化用法（JSON.parse 除外）" },
+    { "category": "business-logic", "status": "not_applicable", "note": "无支付/审批/兑换/状态机流程" },
+    { "category": "data-exposure", "status": "clean", "note": "管理接口挂 /api/admin 且有角色中间件；错误响应由统一 handler 处理" },
+    { "category": "client-side", "status": "not_applicable", "note": "纯 JSON API，无服务端渲染/模板" },
+    { "category": "dependencies-config", "status": "clean", "note": "锁文件中无可达利用链的已知 RCE/CVE" }
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "generator": "sast-code-audit",
+  "skill_version": "1.0.0",
+  "stage": 4,
+  "stage_name": "review",
+  "generated_at": "2026-11-09T10:20:00+08:00",
+  "vulnerabilities": [
+    {
+      "id": "VULN-0001",
+      "name": "文章列表 sort 参数拼接导致 SQL 注入",
+      "vuln_type": "sql_injection",
+      "cwe": "CWE-89",
+      "severity": "CRITICAL",
+      "confidence": 0.9,
+      "file": "src/routes/posts.js",
+      "line": 34,
+      "function": "listPosts",
+      "source": {
+        "location": "src/routes/posts.js:31",
+        "description": "GET /api/posts（公开路由）的 req.query.sort，未经任何字符集约束"
+      },
+      "sink": {
+        "location": "src/routes/posts.js:34",
+        "description": "db('posts').orderByRaw(sort) 将用户输入直接拼接进 ORDER BY 子句"
+      },
+      "data_flow": [
+        "src/routes/posts.js:31 → const sort = req.query.sort || 'created_at'（用户输入）",
+        "src/routes/posts.js:32 → if (!sort) throw ... 仅校验非空，未限制字符集",
+        "src/routes/posts.js:34 → db('posts').select(...).orderByRaw(sort) 拼接执行"
+      ],
+      "exploit_conditions": "无需认证（公开路由）。sqlite 支持子查询，可构造 sort=(CASE WHEN (SELECT substr(email,1,1) FROM users WHERE id=1)='a' THEN id ELSE title END) 进行布尔盲注提取任意表数据",
+      "risk_description": "公网未认证用户可通过 ORDER BY 盲注逐字符提取 users 表（含密码哈希、email、phone），等效任意数据泄露",
+      "evidence": "const sort = req.query.sort || 'created_at';\nconst rows = await db('posts').select('id', 'title', 'created_at').orderByRaw(sort);",
+      "recommendation": "将 sort 映射到白名单列名（const COLUMNS = { date: 'created_at', title: 'title' }），未命中白名单时回退默认值；禁止将用户输入传给 orderByRaw",
+      "review_status": "confirmed",
+      "review_note": "五步复核通过：路由注册于 src/app.js:18 且无鉴权中间件；orderByRaw 不做参数化；sqlite3 驱动允许多语句与子查询；本地已推演出布尔盲注 payload，链路无阻断点",
+      "origin_stage": 2,
+      "fingerprint": "sql_injection|src/routes/posts.js:31|src/routes/posts.js:34|listPosts"
+    },
+    {
+      "id": "VULN-0002",
+      "name": "【复查认定误报】-头像代理接口任意 URL 拉取（SSRF）",
+      "vuln_type": "ssrf",
+      "cwe": "CWE-918",
+      "severity": "HIGH",
+      "confidence": 0.8,
+      "file": "src/routes/avatar.js",
+      "line": 27,
+      "function": "fetchAvatar",
+      "source": {
+        "location": "src/routes/avatar.js:24",
+        "description": "已登录用户提交的 req.query.url，声称为头像地址"
+      },
+      "sink": {
+        "location": "src/routes/avatar.js:27",
+        "description": "axios.get(url) 服务端直接向用户指定 URL 发起请求并回传响应体"
+      },
+      "data_flow": [
+        "src/routes/avatar.js:24 → const url = req.query.url（用户输入）",
+        "src/routes/avatar.js:25 → res.locals.fetch 未做任何校验，直接透传",
+        "src/routes/avatar.js:27 → axios.get(url) 发起服务端请求"
+      ],
+      "exploit_conditions": "任意已登录用户；可请求 http://169.254.169.254/ 云元数据端点或内网服务并读取响应",
+      "risk_description": "服务端按用户指定 URL 发起请求并回传内容，可用于探测内网、读取云实例元数据凭据",
+      "evidence": "const url = req.query.url;\nconst resp = await axios.get(url, { responseType: 'arraybuffer' });\nres.type('image/*').send(resp.data);",
+      "recommendation": "改用统一的 fetch-client 封装（scheme + 域名白名单、禁止解析到内网 IP），并对响应大小与类型做限制",
+      "review_status": "false_positive",
+      "review_note": "证据链断在 sink 一跳：axios.get 实际经由 src/lib/fetch-client.js:12 的封装，该封装强制 https + 域名白名单（githubusercontent.com 等图床域名）并校验解析结果不落在内网/链路本地网段，非白名单域名直接抛错，169.254.169.254 与内网地址均不可达，不构成可利用 SSRF",
+      "origin_stage": 2,
+      "fingerprint": "ssrf|src/routes/avatar.js:24|src/routes/avatar.js:27|fetchAvatar"
+    },
+    {
+      "id": "VULN-0003",
+      "name": "【复查更新】-个人资料接口水平越权（IDOR）",
+      "vuln_type": "idor",
+      "cwe": "CWE-639",
+      "severity": "HIGH",
+      "confidence": 0.8,
+      "file": "src/routes/profile.js",
+      "line": 40,
+      "function": "getProfile",
+      "source": {
+        "location": "src/routes/profile.js:38",
+        "description": "已认证用户 A 的 req.params.userId，可改写为任意用户 id"
+      },
+      "sink": {
+        "location": "src/routes/profile.js:40",
+        "description": "db('users').where({ id: userId }).first() 后将含 email、phone 的完整记录返回给调用方，无归属校验"
+      },
+      "data_flow": [
+        "src/routes/profile.js:38 → const userId = req.params.userId（认证用户可控）",
+        "src/routes/profile.js:39 → 中间件仅验证 JWT 有效，未对比 req.user.id 与 userId",
+        "src/routes/profile.js:40 → db('users').where({ id: userId }).first() 直接返回他人 email/phone"
+      ],
+      "exploit_conditions": "任意已登录用户可枚举 :userId 读取他人 email；phone 字段虽会返回，但历史迁移导致约九成为空值，实际泄露以 email 为主",
+      "risk_description": "对象级授权缺失，任意登录用户可枚举读取他人 PII（email 为主，phone 覆盖率低），构成跨用户数据泄露",
+      "evidence": "router.get('/profile/:userId', requireAuth, async (req, res) => {\n  const userId = req.params.userId;\n  const profile = await db('users').where({ id: userId }).first();\n  res.json(profile); // 返回含 email、phone 的完整行",
+      "recommendation": "以 req.user.id 为查询主键（普通用户禁止传 :userId）；若需管理员查询，在 src/routes/admin.js 的角色中间件后提供独立路由，并在 repository 层追加归属过滤",
+      "review_status": "updated",
+      "review_note": "链路确认成立（requireAuth 只验证 JWT、无归属校验，路由已注册）；更新两点：1) confidence 0.85→0.80——phone 字段空值率高，实际影响略低于初判；2) recommendation 补充管理员查询应走独立路由的具体位置",
+      "origin_stage": 3,
+      "fingerprint": "idor|src/routes/profile.js:38|src/routes/profile.js:40|getProfile"
+    }
+  ]
+}

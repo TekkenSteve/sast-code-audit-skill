@@ -1,0 +1,55 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install "jsonschema>=4.18"
+
+      - name: Validate example artifacts against the data contract
+        run: python sast-code-audit/scripts/validate.py --root examples/demo-project
+
+      - name: Validate each schema and example is well-formed JSON
+        run: |
+          python - <<'EOF'
+          import json, pathlib, sys
+          paths = list(pathlib.Path("sast-code-audit/schemas").glob("*.schema.json"))
+          paths += list(pathlib.Path("examples").rglob("*.json"))
+          for p in paths:
+              json.loads(p.read_text(encoding="utf-8"))
+              print("ok", p)
+          print(f"{len(paths)} files checked")
+          EOF
+
+      - name: Self-test validator catches contract violations
+        run: |
+          python - <<'EOF'
+          import json, pathlib, shutil, subprocess, sys, tempfile
+
+          validator = ["python", "sast-code-audit/scripts/validate.py"]
+          src = pathlib.Path("examples/demo-project")
+          with tempfile.TemporaryDirectory() as tmp:
+              root = pathlib.Path(tmp) / "proj"
+              shutil.copytree(src, root)
+              report = root / ".sast" / "results.json"
+              doc = json.loads(report.read_text(encoding="utf-8"))
+              doc["summary"]["high"] = 99  # tamper: summary no longer matches list
+              report.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+              proc = subprocess.run(validator + ["--root", str(root)], capture_output=True, text=True)
+              if proc.returncode == 0:
+                  print("validator failed to catch tampered summary")
+                  sys.exit(1)
+              print("validator correctly rejected tampered report")
+          EOF
